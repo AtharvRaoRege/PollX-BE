@@ -3,13 +3,53 @@ const Poll = require('../models/Poll');
 const User = require('../models/User');
 const Comment = require('../models/Comment');
 const Notification = require('../models/Notification');
+const Vote = require('../models/Vote');
 
 // @desc    Get approved polls (Feed)
 // @route   GET /api/polls
-// @access  Public
+// @access  Public (Optional Auth)
 const getPolls = async (req, res) => {
   try {
-    const polls = await Poll.find({ status: 'approved' }).sort({ createdAt: -1 });
+    const { sort } = req.query;
+    let sortQuery = { createdAt: -1 };
+
+    if (sort === 'trending') {
+      sortQuery = { totalVotes: -1, createdAt: -1 };
+    }
+
+    const polls = await Poll.find({ status: 'approved' })
+      .sort(sortQuery)
+      .populate('authorId', 'username avatarUrl')
+      .lean(); // Use lean for performance and modification
+
+    // If user is logged in, fetch their votes
+    if (req.user) {
+      const votes = await Vote.find({ userId: req.user._id, pollId: { $in: polls.map(p => p._id) } });
+      const voteMap = new Map(votes.map(v => [v.pollId.toString(), v.optionId]));
+
+      polls.forEach(poll => {
+        poll.userVoteId = voteMap.get(poll._id.toString());
+      });
+    }
+
+    // Fetch comments for all polls
+    const pollIds = polls.map(p => p._id);
+    const allComments = await Comment.find({ pollId: { $in: pollIds } }).sort({ createdAt: -1 }).lean();
+
+    // Group comments by pollId
+    const commentMap = {};
+    allComments.forEach(c => {
+      const pid = c.pollId.toString();
+      if (!commentMap[pid]) commentMap[pid] = [];
+      commentMap[pid].push(c);
+    });
+
+    // Attach to polls
+    polls.forEach(poll => {
+      const pid = poll._id.toString();
+      poll.comments = commentMap[pid] || [];
+    });
+
     res.json(polls);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -39,15 +79,15 @@ const updatePollStatus = async (req, res) => {
     if (poll) {
       poll.status = status;
       const updatedPoll = await poll.save();
-      
+
       // Notify Author
       if (status === 'approved' || status === 'rejected') {
-          await Notification.create({
-              recipient: poll.authorId,
-              type: 'system',
-              pollId: poll._id,
-              message: `Your poll "${poll.question.substring(0, 30)}..." was ${status}.`
-          });
+        await Notification.create({
+          recipient: poll.authorId,
+          type: 'system',
+          pollId: poll._id,
+          message: `Your poll "${poll.question.substring(0, 30)}..." was ${status}.`
+        });
       }
 
       res.json(updatedPoll);
@@ -64,7 +104,7 @@ const updatePollStatus = async (req, res) => {
 // @access  Private
 const createPoll = async (req, res) => {
   try {
-    const { question, category, description, options, mode } = req.body;
+    const { question, category, description, options, mode, tags } = req.body;
 
     // Validate options for standard mode
     if (mode === 'standard' && (!options || options.length < 2)) {
@@ -77,12 +117,16 @@ const createPoll = async (req, res) => {
       description,
       category,
       mode: mode || 'standard',
-      status: 'pending', // Default to pending
-      options: options || [],
-      consciousnessEntries: []
+      status: 'approved', // Auto-approve
+      options: options ? options.map(opt => ({ text: opt, votes: 0 })) : [],
+      consciousnessEntries: [],
+      tags: tags || []
     });
 
     const createdPoll = await poll.save();
+    // Populate author info before returning
+    await createdPoll.populate('authorId', 'username avatarUrl');
+
     res.status(201).json(createdPoll);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -95,14 +139,23 @@ const createPoll = async (req, res) => {
 const votePoll = async (req, res) => {
   try {
     const { optionId } = req.body;
-    const poll = await Poll.findById(req.params.id);
+    const pollId = req.params.id;
+    const userId = req.user._id;
+
+    const poll = await Poll.findById(pollId);
 
     if (!poll) {
       return res.status(404).json({ message: 'Poll not found' });
     }
-    
+
     if (poll.mode !== 'standard') {
-        return res.status(400).json({ message: 'Cannot vote standard on this poll mode' });
+      return res.status(400).json({ message: 'Cannot vote standard on this poll mode' });
+    }
+
+    // Check if user already voted
+    const existingVote = await Vote.findOne({ userId, pollId });
+    if (existingVote) {
+      return res.status(400).json({ message: 'You have already voted on this poll' });
     }
 
     // Find the option
@@ -110,6 +163,13 @@ const votePoll = async (req, res) => {
     if (!option) {
       return res.status(404).json({ message: 'Option not found' });
     }
+
+    // Create Vote Record
+    await Vote.create({
+      userId,
+      pollId,
+      optionId
+    });
 
     // Update Vote Count
     option.votes += 1;
@@ -122,25 +182,39 @@ const votePoll = async (req, res) => {
     option.archetypes.set(userArchetype, currentCount + 1);
 
     await poll.save();
-    
+
     // Update User Stats
     req.user.votesCast += 1;
     req.user.xp += 10;
     await req.user.save();
 
+    // Emit Socket Event
+    if (req.io) {
+      req.io.to(`poll_${pollId}`).emit('vote_updated', {
+        pollId,
+        optionId,
+        newVoteCount: option.votes,
+        totalVotes: poll.totalVotes
+      });
+    }
+
     // Create Notification for Author (if not self vote)
     if (poll.authorId.toString() !== req.user._id.toString()) {
-        await Notification.create({
-            recipient: poll.authorId,
-            sender: req.user._id,
-            type: 'vote',
-            pollId: poll._id,
-            message: `voted on your poll: "${poll.question.substring(0, 20)}..."`
-        });
+      await Notification.create({
+        recipient: poll.authorId,
+        sender: req.user._id,
+        type: 'vote',
+        pollId: poll._id,
+        message: `voted on your poll: "${poll.question.substring(0, 20)}..."`
+      });
     }
 
     res.json(poll);
   } catch (error) {
+    // Handle duplicate key error specifically if race condition occurs
+    if (error.code === 11000) {
+      return res.status(400).json({ message: 'You have already voted on this poll' });
+    }
     res.status(500).json({ message: error.message });
   }
 };
@@ -184,7 +258,7 @@ const addComment = async (req, res) => {
     const poll = await Poll.findById(req.params.id);
 
     if (!poll) return res.status(404).json({ message: 'Poll not found' });
-    
+
     const comment = await Comment.create({
       pollId: req.params.id,
       authorId: req.user._id,
@@ -193,30 +267,36 @@ const addComment = async (req, res) => {
       parentId: parentId || null
     });
 
+    console.log('DEBUG: Comment Created:', {
+      id: comment._id,
+      pollId: comment.pollId,
+      text: comment.text
+    });
+
     // Notify Logic: Reply or Poll Author
     if (parentId) {
-        // Reply: Notify parent comment author
-        const parentComment = await Comment.findById(parentId);
-        if (parentComment && parentComment.authorId.toString() !== req.user._id.toString()) {
-             await Notification.create({
-                recipient: parentComment.authorId,
-                sender: req.user._id,
-                type: 'reply',
-                pollId: poll._id,
-                message: `replied to your comment: "${text.substring(0, 30)}..."`
-            });
-        }
+      // Reply: Notify parent comment author
+      const parentComment = await Comment.findById(parentId);
+      if (parentComment && parentComment.authorId.toString() !== req.user._id.toString()) {
+        await Notification.create({
+          recipient: parentComment.authorId,
+          sender: req.user._id,
+          type: 'reply',
+          pollId: poll._id,
+          message: `replied to your comment: "${text.substring(0, 30)}..."`
+        });
+      }
     } else {
-        // Root comment: Notify poll author
-        if (poll.authorId.toString() !== req.user._id.toString()) {
-            await Notification.create({
-                recipient: poll.authorId,
-                sender: req.user._id,
-                type: 'comment',
-                pollId: poll._id,
-                message: `commented on your poll: "${text.substring(0, 30)}..."`
-            });
-        }
+      // Root comment: Notify poll author
+      if (poll.authorId.toString() !== req.user._id.toString()) {
+        await Notification.create({
+          recipient: poll.authorId,
+          sender: req.user._id,
+          type: 'comment',
+          pollId: poll._id,
+          message: `commented on your poll: "${text.substring(0, 30)}..."`
+        });
+      }
     }
 
     // Mention Notifications
@@ -226,20 +306,20 @@ const addComment = async (req, res) => {
     const mentionedUsernames = matches.map(match => match[1]);
 
     if (mentionedUsernames.length > 0) {
-        const mentionedUsers = await User.find({ username: { $in: mentionedUsernames } });
-        
-        for (const mUser of mentionedUsers) {
-            // Don't notify if user mentioned themselves
-            if (mUser._id.toString() !== req.user._id.toString()) {
-                await Notification.create({
-                    recipient: mUser._id,
-                    sender: req.user._id,
-                    type: 'mention',
-                    pollId: poll._id,
-                    message: `mentioned you in a comment: "${text.substring(0, 20)}..."`
-                });
-            }
+      const mentionedUsers = await User.find({ username: { $in: mentionedUsernames } });
+
+      for (const mUser of mentionedUsers) {
+        // Don't notify if user mentioned themselves
+        if (mUser._id.toString() !== req.user._id.toString()) {
+          await Notification.create({
+            recipient: mUser._id,
+            sender: req.user._id,
+            type: 'mention',
+            pollId: poll._id,
+            message: `mentioned you in a comment: "${text.substring(0, 20)}..."`
+          });
         }
+      }
     }
 
     res.status(201).json(comment);
@@ -261,13 +341,148 @@ const getComments = async (req, res) => {
   }
 };
 
-module.exports = { 
-  getPolls, 
-  getPendingPolls, 
-  updatePollStatus, 
-  createPoll, 
-  votePoll, 
-  addConsciousnessEntry, 
-  addComment, 
-  getComments 
+// @desc    Get user's own polls
+// @route   GET /api/polls/me
+// @access  Private
+const getMyPolls = async (req, res) => {
+  try {
+    const polls = await Poll.find({ authorId: req.user._id }).sort({ createdAt: -1 });
+
+    // Fetch comments for these polls to keep structure consistent
+    const pollIds = polls.map(p => p._id);
+    const allComments = await Comment.find({ pollId: { $in: pollIds } }).sort({ createdAt: -1 }).lean();
+
+    const commentMap = {};
+    allComments.forEach(c => {
+      const pid = c.pollId.toString();
+      if (!commentMap[pid]) commentMap[pid] = [];
+      commentMap[pid].push(c);
+    });
+
+    polls.forEach(poll => {
+      poll.comments = commentMap[poll._id.toString()] || [];
+    });
+
+    res.json(polls);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc    Delete a poll
+// @route   DELETE /api/polls/:id
+// @access  Private
+const deletePoll = async (req, res) => {
+  try {
+    console.log('DEBUG: deletePoll called for ID:', req.params.id);
+    const poll = await Poll.findById(req.params.id);
+
+    if (!poll) {
+      console.log('DEBUG: Poll not found');
+      return res.status(404).json({ message: 'Poll not found' });
+    }
+
+    // Check ownership
+    if (poll.authorId.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+      console.log('DEBUG: Not authorized to delete');
+      return res.status(401).json({ message: 'Not authorized' });
+    }
+
+    // Use deleteOne instead of remove() which is deprecated in newer Mongoose versions
+    await Poll.deleteOne({ _id: poll._id });
+    await Vote.deleteMany({ pollId: poll._id });
+    await Comment.deleteMany({ pollId: poll._id });
+
+    console.log('DEBUG: Poll deleted successfully');
+    res.json({ message: 'Poll removed' });
+  } catch (error) {
+    console.error('DEBUG: deletePoll Error:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc    Update a poll
+// @route   PUT /api/polls/:id
+// @access  Private
+const updatePoll = async (req, res) => {
+  try {
+    const { question, options } = req.body;
+    const poll = await Poll.findById(req.params.id);
+
+    if (!poll) {
+      return res.status(404).json({ message: 'Poll not found' });
+    }
+
+    // Check ownership
+    if (poll.authorId.toString() !== req.user._id.toString()) {
+      return res.status(401).json({ message: 'Not authorized' });
+    }
+
+    // Update fields
+    if (question) poll.question = question;
+
+    // Update options logic
+    // We need to be careful not to lose vote counts if options are just renamed.
+    // For now, assuming simple replacement or addition. 
+    // If an option is removed, its votes are technically "lost" or orphaned in Vote model unless we handle it.
+    // For simplicity in this MVP: Re-map options. 
+    // If the text matches an existing option, keep its votes.
+    if (options) {
+      const newOptions = options.map(optText => {
+        const existing = poll.options.find(o => o.text === optText);
+        return existing ? existing : { text: optText, votes: 0 };
+      });
+      poll.options = newOptions;
+    }
+
+    poll.isEdited = true;
+    const updatedPoll = await poll.save();
+    res.json(updatedPoll);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc    Get trending topics (hashtags)
+// @route   GET /api/polls/trending
+// @access  Public
+const getTrendingTopics = async (req, res) => {
+  try {
+    const trending = await Poll.aggregate([
+      { $unwind: "$tags" },
+      {
+        $group: {
+          _id: "$tags",
+          count: { $sum: 1 }
+        }
+      },
+      { $sort: { count: -1 } },
+      { $limit: 5 }
+    ]);
+
+    // Format for frontend: { tag: "#Tag", count: 10 }
+    const formatted = trending.map(t => ({
+      tag: t._id,
+      count: t.count
+    }));
+
+    res.json(formatted);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+module.exports = {
+  getPolls,
+  getPendingPolls,
+  updatePollStatus,
+  createPoll,
+  votePoll,
+  addConsciousnessEntry,
+  addComment,
+  getComments,
+  getMyPolls,
+  deletePoll,
+  updatePoll,
+  getTrendingTopics
 };

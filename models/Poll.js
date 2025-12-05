@@ -16,10 +16,10 @@ const pollOptionSchema = new mongoose.Schema({
 const consciousnessEntrySchema = new mongoose.Schema({
   text: { type: String, required: true },
   intensity: { type: Number, required: true }, // 0-100
-  layer: { 
-    type: String, 
-    enum: ['real', 'hidden', 'desired'], 
-    default: 'real' 
+  layer: {
+    type: String,
+    enum: ['real', 'hidden', 'desired'],
+    default: 'real'
   },
   emoji: { type: String },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // Optional (anon)
@@ -30,40 +30,36 @@ const pollSchema = new mongoose.Schema({
   authorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   question: { type: String, required: true },
   description: { type: String },
-  category: { 
-    type: String, 
+  category: {
+    type: String,
     enum: ['Moral', 'Social', 'Politics', 'Tech', 'Hypothetical', 'Relationships', 'Consciousness'],
-    required: true 
+    required: true
   },
-  mode: { 
-    type: String, 
-    enum: ['standard', 'consciousness'], 
-    default: 'standard' 
+  mode: {
+    type: String,
+    enum: ['standard', 'consciousness'],
+    default: 'standard'
   },
   status: {
     type: String,
     enum: ['pending', 'approved', 'rejected'],
     default: 'pending'
   },
-  
+
   // Standard Mode Data
   options: [pollOptionSchema],
-  
+
   // Consciousness Mode Data
   consciousnessEntries: [consciousnessEntrySchema],
-  
+
   // Meta
   totalVotes: { type: Number, default: 0 },
+  totalVotes: { type: Number, default: 0 },
   isHot: { type: Boolean, default: false },
-  
-  // AI Prediction Cache
-  prediction: {
-    predictionText: String,
-    predictedOptions: [{
-      text: String,
-      percentage: Number
-    }]
-  }
+  isEdited: { type: Boolean, default: false },
+  tags: [{ type: String }]
+
+
 }, {
   timestamps: true
 });

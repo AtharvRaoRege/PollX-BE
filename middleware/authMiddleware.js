@@ -5,13 +5,10 @@ const User = require('../models/User');
 const protect = async (req, res, next) => {
   let token;
 
-  if (
-    req.headers.authorization &&
-    req.headers.authorization.startsWith('Bearer')
-  ) {
-    try {
-      token = req.headers.authorization.split(' ')[1];
+  token = req.cookies.jwt;
 
+  if (token) {
+    try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret_dev_only');
 
       req.user = await User.findById(decoded.id).select('-password');
@@ -21,9 +18,7 @@ const protect = async (req, res, next) => {
       console.error(error);
       res.status(401).json({ message: 'Not authorized, token failed' });
     }
-  }
-
-  if (!token) {
+  } else {
     res.status(401).json({ message: 'Not authorized, no token' });
   }
 };
@@ -36,4 +31,19 @@ const admin = (req, res, next) => {
   }
 };
 
-module.exports = { protect, admin };
+const optionalProtect = async (req, res, next) => {
+  let token = req.cookies.jwt;
+
+  if (token) {
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret_dev_only');
+      req.user = await User.findById(decoded.id).select('-password');
+    } catch (error) {
+      console.error("Optional Auth Failed:", error.message);
+      // Do not fail, just continue as guest
+    }
+  }
+  next();
+};
+
+module.exports = { protect, admin, optionalProtect };
