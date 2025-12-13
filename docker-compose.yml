@@ -1,0 +1,22 @@
+version: '3.8' # can be ignored (ignored by modern docker-compose versions)
+
+services:
+  app:
+    build: .
+    container_name: pollx-be
+    restart: always
+    environment:
+      MONGO_URL: ${MONGO_URL}
+      NODE_ENV: production
+      PORT: 4000
+    ports:
+      - "8080:${PORT}"
+    depends_on:
+      - redis # We want redis first then the app ( this will ensure that )
+
+  redis:
+    image: "redis:alpine"
+    container_name: "pollx-redis"
+    restart: always
+    ports:
+      - "6379:6379"
