@@ -29,6 +29,7 @@ const userSchema = new mongoose.Schema({
   tags: [{ type: String }],
 
   savedPollIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Poll' }],
+  badges: [{ type: String }],
   settings: { type: userSettingsSchema, default: () => ({}) }
 }, {
   timestamps: true

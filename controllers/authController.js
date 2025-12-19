@@ -12,6 +12,26 @@ const setCookie = (res, token) => {
   });
 };
 
+// Helper to calculate badges
+const calculateBadges = (user) => {
+  const newBadges = new Set(user.badges || []);
+
+  if (user.votesCast >= 10) newBadges.add('voter_1'); // Bronze Voter
+  if (user.votesCast >= 50) newBadges.add('voter_2'); // Silver Voter
+  if (user.votesCast >= 100) newBadges.add('voter_3'); // Gold Voter
+
+  if (user.streak >= 3) newBadges.add('streak_1'); // Heating Up
+  if (user.streak >= 7) newBadges.add('streak_2'); // On Fire
+  if (user.streak >= 30) newBadges.add('streak_3'); // Unstoppable
+
+  // Simple Veteran check (mocked for new users to see immediately if we want, or strict)
+  // Let's make it strict: 3 days for "Newcomer"
+  const threeDays = 3 * 24 * 60 * 60 * 1000;
+  if (new Date() - new Date(user.createdAt) > threeDays) newBadges.add('veteran_1');
+
+  return Array.from(newBadges);
+};
+
 // @desc    Auth user & get token
 // @route   POST /api/auth/login
 // @access  Public
@@ -22,6 +42,13 @@ const authUser = async (req, res) => {
     const user = await User.findOne({ email });
 
     if (user && (await user.matchPassword(password))) {
+      // Check badges on login
+      const currentBadges = calculateBadges(user);
+      if (currentBadges.length !== (user.badges || []).length) {
+          user.badges = currentBadges;
+          await user.save();
+      }
+
       const token = generateToken(user._id);
       setCookie(res, token);
 
@@ -32,6 +59,9 @@ const authUser = async (req, res) => {
         avatarUrl: user.avatarUrl,
         settings: user.settings,
         role: user.role,
+        badges: user.badges,
+        xp: user.xp,
+        level: user.level
       });
     } else {
       res.status(401).json({ message: 'Invalid email or password' });
@@ -73,6 +103,9 @@ const registerUser = async (req, res) => {
         username: user.username,
         email: user.email,
         role: user.role,
+        badges: user.badges,
+        xp: user.xp,
+        level: user.level
       });
     } else {
       res.status(400).json({ message: 'Invalid user data' });
@@ -101,6 +134,19 @@ const getUserProfile = async (req, res) => {
   try {
     const user = await User.findById(req.user._id).select('-password');
     if (user) {
+      // Check badges on profile fetch
+      const currentBadges = calculateBadges(user);
+      
+      // Compare length/content to avoid unnecessary writes
+      // Simple length check + stringify sort check
+      const prevBadgesStr = JSON.stringify((user.badges || []).sort());
+      const newBadgesStr = JSON.stringify(currentBadges.sort());
+
+      if (prevBadgesStr !== newBadgesStr) {
+          user.badges = currentBadges;
+          await user.save();
+      }
+      
       res.json(user);
     } else {
       res.status(404).json({ message: 'User not found' });
