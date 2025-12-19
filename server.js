@@ -43,7 +43,7 @@ io.on('connection', (socket) => {
 // Middleware
 app.use(
   cors({
-    origin: [process.env.FRONTEND_URL, "http://localhost:3000", "http://localhost:5173"], // Added 5173 for Vite default
+    origin: [process.env.FRONTEND_URL, "http://localhost:3000", "http://localhost:5173","http://localhost:3001"], // Added 5173 for Vite default
     credentials: true
   })
 );
@@ -67,12 +67,30 @@ app.use((req, res, next) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/polls', pollRoutes);
 app.use('/api/notifications', notificationRoutes);
+const { calculateMood, getMood } = require('./controllers/moodController'); // Import Controller
+
+// ... imports
+
 app.use('/api/election', electionRoutes);
+
+// System / Mood Routes
+app.get('/api/system/mood', getMood);
+
+// Scheduler: Calculate Mood every 6 hours
+const MOOD_INTERVAL = 6 * 60 * 60 * 1000;
+setInterval(() => {
+  calculateMood();
+}, MOOD_INTERVAL);
+
+// Run once on startup (dev only, or check DB age)
+// setTimeout(calculateMood, 5000); 
 
 // Health Check
 app.get('/', (req, res) => {
   res.send('POLLX API is running...');
 });
+
+// ... rest of file
 
 // Error Handling Middleware
 app.use((err, req, res, next) => {
@@ -89,5 +107,5 @@ const SERVER_PORT = process.env.PORT || 5000;
 
 server.listen(SERVER_PORT, '0.0.0.0', () => {
   console.log(`Server running in ${process.env.NODE_ENV} mode on port ${SERVER_PORT}`);
-  console.log(`Accepting requests from: ${process.env.FRONTEND_URL}, http://localhost:3000, http://localhost:5173`);
+  console.log(`Accepting requests from: ${process.env.FRONTEND_URL}, http://localhost:3000, http://localhost:5173, http://localhost:3001`,);
 });

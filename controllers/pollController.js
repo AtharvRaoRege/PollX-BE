@@ -44,10 +44,25 @@ const getPolls = async (req, res) => {
       commentMap[pid].push(c);
     });
 
-    // Attach to polls
+    // Attach to polls & Mask Identity if Anonymous
     polls.forEach(poll => {
       const pid = poll._id.toString();
       poll.comments = commentMap[pid] || [];
+
+      // Privacy Masking
+      if (poll.isAnonymous) {
+        // Only show identity if viewer is the author or admin
+        const viewerId = req.user ? req.user._id.toString() : null;
+        const authorId = poll.authorId._id ? poll.authorId._id.toString() : poll.authorId.toString();
+
+        if (req.user?.role !== 'admin' && viewerId !== authorId) {
+          poll.authorId = {
+            _id: 'anon',
+            username: 'Anonymous',
+            avatarUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=anon'
+          };
+        }
+      }
     });
 
     res.json(polls);
@@ -104,7 +119,7 @@ const updatePollStatus = async (req, res) => {
 // @access  Private
 const createPoll = async (req, res) => {
   try {
-    const { question, category, description, options, mode, tags } = req.body;
+    const { question, category, description, options, mode, tags, isAnonymous } = req.body; // Added isAnonymous
 
     // Validate options for standard mode
     if (mode === 'standard' && (!options || options.length < 2)) {
@@ -120,7 +135,8 @@ const createPoll = async (req, res) => {
       status: 'approved', // Auto-approve
       options: options ? options.map(opt => ({ text: opt, votes: 0 })) : [],
       consciousnessEntries: [],
-      tags: tags || []
+      tags: tags || [],
+      isAnonymous: isAnonymous !== undefined ? isAnonymous : (req.user.settings?.anonymousDefault || false)
     });
 
     const createdPoll = await poll.save();
@@ -199,14 +215,21 @@ const votePoll = async (req, res) => {
     }
 
     // Create Notification for Author (if not self vote)
+    // CHECK GHOST MODE: Only notify if Ghost Mode is OFF
     if (poll.authorId.toString() !== req.user._id.toString()) {
-      await Notification.create({
-        recipient: poll.authorId,
-        sender: req.user._id,
-        type: 'vote',
-        pollId: poll._id,
-        message: `voted on your poll: "${poll.question.substring(0, 20)}..."`
-      });
+      // Check if Ghost Mode is enabled in user settings
+      // Note: req.user is a Mongoose document, so we can access .settings
+      const isGhost = req.user.settings?.ghostMode;
+
+      if (!isGhost) {
+        await Notification.create({
+          recipient: poll.authorId,
+          sender: req.user._id,
+          type: 'vote',
+          pollId: poll._id,
+          message: `voted on your poll: "${poll.question.substring(0, 20)}..."`
+        });
+      }
     }
 
     res.json(poll);
