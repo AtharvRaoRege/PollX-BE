@@ -57,7 +57,8 @@ const pollSchema = new mongoose.Schema({
   totalVotes: { type: Number, default: 0 },
   isHot: { type: Boolean, default: false },
   isEdited: { type: Boolean, default: false },
-  tags: [{ type: String }]
+  tags: [{ type: String }],
+  isAnonymous: { type: Boolean, default: false }
 
 
 }, {
