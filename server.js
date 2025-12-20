@@ -17,6 +17,9 @@ dotenv.config();
 connectDB();
 
 const app = express();
+// Enable trust proxy for Load Balancers (Heroku/Render/Vercel) to support Secure cookies
+app.set('trust proxy', 1);
+
 const server = http.createServer(app);
 
 const io = new Server(server, {
