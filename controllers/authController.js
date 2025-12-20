@@ -4,10 +4,12 @@ const generateToken = require('../utils/generateToken');
 
 // Helper to set cookie
 const setCookie = (res, token) => {
+  const isProduction = process.env.NODE_ENV === 'production';
+  
   res.cookie('jwt', token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax', // Changed from 'strict' to 'lax' for better navigation support
+    secure: isProduction, // Must be true for SameSite=None
+    sameSite: isProduction ? 'none' : 'lax', // None allows cross-site, Lax for local dev
     maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
   });
 };

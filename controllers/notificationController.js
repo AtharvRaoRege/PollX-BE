@@ -12,6 +12,7 @@ const getNotifications = async (req, res) => {
       .limit(20);
     res.json(notifications);
   } catch (error) {
+    console.error("Get Notifications Error:", error);
     res.status(500).json({ message: error.message });
   }
 };

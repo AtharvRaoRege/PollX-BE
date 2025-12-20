@@ -145,6 +145,7 @@ const createPoll = async (req, res) => {
 
     res.status(201).json(createdPoll);
   } catch (error) {
+    console.error("Create Poll Error:", error);
     res.status(500).json({ message: error.message });
   }
 };
